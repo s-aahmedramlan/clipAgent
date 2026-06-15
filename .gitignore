@@ -1,0 +1,7 @@
+.env
+youtube_credentials.json
+token.json
+downloaded_videos/
+__pycache__/
+*.pyc
+.DS_Store
