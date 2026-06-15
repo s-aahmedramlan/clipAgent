@@ -43,14 +43,31 @@ def download_tiktok_video(tiktok_url: str, output_path: str) -> bool:
     print(f"  Downloading from {tiktok_url}...")
 
     try:
+        import shutil
+        temp_dir = "temp_download"
+        os.makedirs(temp_dir, exist_ok=True)
+
         ydl_opts = {
-            'outtmpl': output_path.replace('.mp4', ''),
+            'outtmpl': os.path.join(temp_dir, 'video'),
             'quiet': False,
             'no_warnings': True,
             'format': 'best[vcodec!=h265]',
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             ydl.download([tiktok_url])
+
+        # Find the downloaded file and move it
+        for file in os.listdir(temp_dir):
+            if file.startswith('video'):
+                src = os.path.join(temp_dir, file)
+                shutil.move(src, output_path)
+                break
+
+        # Cleanup
+        try:
+            os.rmdir(temp_dir)
+        except:
+            pass
 
         print(f"  ✓ Downloaded to {output_path}")
         return True
@@ -66,7 +83,7 @@ def rewrite_caption(original_caption: str) -> str:
     client = anthropic.Anthropic()
 
     message = client.messages.create(
-        model="claude-3-5-sonnet-20241022",
+        model="claude-opus-4-8",
         max_tokens=1024,
         messages=[
             {
@@ -97,8 +114,12 @@ def get_youtube_service():
         if creds and creds.expired and creds.refresh_token:
             creds.refresh(Request())
         else:
+            creds_file = YOUTUBE_CREDENTIALS_FILE
+            if not os.path.exists(creds_file):
+                raise FileNotFoundError(f"Credentials file not found: {creds_file}")
+
             flow = InstalledAppFlow.from_client_secrets_file(
-                YOUTUBE_CREDENTIALS_FILE, SCOPES
+                creds_file, SCOPES
             )
             creds = flow.run_local_server(port=0)
 
@@ -114,6 +135,16 @@ def upload_to_youtube(video_path: str, caption: str, title: str = None) -> str |
         title = caption[:50]
 
     print(f"  Uploading to YouTube with title: '{title}'")
+
+    video_path = os.path.abspath(video_path)
+
+    if not os.path.exists(YOUTUBE_CREDENTIALS_FILE):
+        print(f"  ✗ YouTube credentials file not found: {YOUTUBE_CREDENTIALS_FILE}")
+        return None
+
+    if not os.path.exists(video_path):
+        print(f"  ✗ Video file not found: {video_path}")
+        return None
 
     try:
         youtube = get_youtube_service()
@@ -131,22 +162,29 @@ def upload_to_youtube(video_path: str, caption: str, title: str = None) -> str |
             }
         }
 
-        with open(video_path, "rb") as f:
-            request = youtube.videos().insert(
-                part="snippet,status",
-                body=body,
-                media_body=googleapiclient.http.MediaFileUpload(
-                    video_path,
-                    mimetype="video/mp4"
-                )
+        request = youtube.videos().insert(
+            part="snippet,status",
+            body=body,
+            media_body=googleapiclient.http.MediaFileUpload(
+                video_path,
+                mimetype="video/mp4",
+                resumable=True
             )
-            response = request.execute()
+        )
+        response = request.execute()
 
         video_id = response.get("id")
-        print(f"  ✓ Uploaded with ID: {video_id}")
-        return video_id
+        if video_id:
+            print(f"  ✓ Uploaded with ID: {video_id}")
+            return video_id
+        else:
+            print(f"  ✗ Upload failed: No video ID in response")
+            print(f"  Response: {response}")
+            return None
     except Exception as e:
-        print(f"  ✗ Upload failed: {e}")
+        print(f"  ✗ Upload failed: {type(e).__name__}: {e}")
+        import traceback
+        traceback.print_exc()
         return None
 
 
